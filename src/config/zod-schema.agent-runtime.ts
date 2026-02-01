@@ -447,6 +447,8 @@ export const AgentEntrySchema = z
               .strict(),
           ])
           .optional(),
+        overrideDefaultDeny: z.boolean().optional(),
+        maxSpawnDepth: z.number().int().nonnegative().optional(),
       })
       .strict()
       .optional(),

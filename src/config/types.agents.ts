@@ -36,6 +36,10 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Override default tool deny list (allows session tools). Default: false */
+    overrideDefaultDeny?: boolean;
+    /** Max spawn depth (0 = no spawning, 1 = can spawn but children can't, etc). Default: 0 */
+    maxSpawnDepth?: number;
   };
   sandbox?: {
     mode?: "off" | "non-main" | "all";

@@ -95,10 +95,18 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "memory_get",
 ];
 
-export function resolveSubagentToolPolicy(cfg?: OpenClawConfig): SandboxToolPolicy {
+export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, agentId?: string): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
+
+  // Check if this agent is allowed to override default denies
+  const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  const canOverrideDefaults = agentConfig?.subagents?.overrideDefaultDeny === true;
+
+  // If agent can override, only use configured denies (not the hardcoded defaults)
+  const baseDeny = canOverrideDefaults ? [] : DEFAULT_SUBAGENT_TOOL_DENY;
+
   const deny = [
-    ...DEFAULT_SUBAGENT_TOOL_DENY,
+    ...baseDeny,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
