@@ -121,12 +121,34 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
+      
+      // Check if this is a subagent session
       if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
-        return jsonResult({
-          status: "forbidden",
-          error: "sessions_spawn is not allowed from sub-agent sessions",
-        });
+        // Get the agent config to check if it's allowed to spawn
+        const parsedRequester = parseAgentSessionKey(requesterSessionKey);
+        const requesterAgentConfig = parsedRequester?.agentId
+          ? resolveAgentConfig(cfg, parsedRequester.agentId)
+          : undefined;
+        const canSpawnFromSubagent = requesterAgentConfig?.subagents?.overrideDefaultDeny === true;
+        const maxDepth = requesterAgentConfig?.subagents?.maxSpawnDepth ?? 0;
+        
+        // Count colons in subagent portion as rough depth proxy
+        const subagentDepth = (requesterSessionKey.match(/subagent:/g) || []).length;
+        
+        if (!canSpawnFromSubagent) {
+          return jsonResult({
+            status: "forbidden",
+            error: "sessions_spawn is not allowed from sub-agent sessions",
+          });
+        }
+        if (maxDepth > 0 && subagentDepth >= maxDepth) {
+          return jsonResult({
+            status: "forbidden",
+            error: `Max spawn depth (${maxDepth}) exceeded. Current depth: ${subagentDepth}`,
+          });
+        }
       }
+      
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
             key: requesterSessionKey,
