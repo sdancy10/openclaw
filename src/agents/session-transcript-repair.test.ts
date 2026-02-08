@@ -11,8 +11,8 @@ describe("sanitizeToolUseResultPairing", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_1", name: "read", arguments: '{"path":"f"}' },
+          { type: "toolCall", id: "call_2", name: "exec", arguments: '{"cmd":"ls"}' },
         ],
       },
       { role: "user", content: "user message that should come after tool use" },
@@ -38,7 +38,7 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: '{"path":"f"}' }],
       },
       {
         role: "toolResult",
@@ -65,7 +65,7 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: '{"path":"f"}' }],
       },
       {
         role: "toolResult",
@@ -146,5 +146,63 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+
+  it("drops tool calls with empty object arguments (aborted stream artifact)", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "hello" },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("drops tool calls with empty string arguments", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: "" }],
+      },
+      { role: "user", content: "hello" },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("keeps tool calls with valid string arguments", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: '{"path":"file.ts"}' },
+        ],
+      },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("assistant");
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(Array.isArray(assistant.content) ? assistant.content.length : 0).toBe(1);
+  });
+
+  it("keeps tool calls with valid object arguments (has keys)", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.ts" } }],
+      },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("assistant");
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(Array.isArray(assistant.content) ? assistant.content.length : 0).toBe(1);
   });
 });
