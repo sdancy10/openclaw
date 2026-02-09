@@ -119,7 +119,7 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
-      
+
       // Check if this is a subagent session
       if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
         // Get the agent config to check if it's allowed to spawn
@@ -129,10 +129,10 @@ export function createSessionsSpawnTool(opts?: {
           : undefined;
         const canSpawnFromSubagent = requesterAgentConfig?.subagents?.overrideDefaultDeny === true;
         const maxDepth = requesterAgentConfig?.subagents?.maxSpawnDepth ?? 0;
-        
+
         // Count colons in subagent portion as rough depth proxy
         const subagentDepth = (requesterSessionKey.match(/subagent:/g) || []).length;
-        
+
         if (!canSpawnFromSubagent) {
           return jsonResult({
             status: "forbidden",
@@ -146,7 +146,7 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
-      
+
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
             key: requesterSessionKey,
@@ -234,6 +234,26 @@ export function createSessionsSpawnTool(opts?: {
             });
           }
           modelWarning = messageText;
+        }
+      }
+      if (thinkingOverride !== undefined) {
+        try {
+          await callGateway({
+            method: "sessions.patch",
+            params: {
+              key: childSessionKey,
+              thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
+            },
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          const messageText =
+            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+          return jsonResult({
+            status: "error",
+            error: messageText,
+            childSessionKey,
+          });
         }
       }
       const childSystemPrompt = buildSubagentSystemPrompt({
