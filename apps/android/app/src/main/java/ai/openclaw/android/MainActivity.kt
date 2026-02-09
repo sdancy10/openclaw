@@ -9,8 +9,6 @@ import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.material3.Surface
-import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -57,9 +55,7 @@ class MainActivity : ComponentActivity() {
 
     setContent {
       OpenClawTheme {
-        Surface(modifier = Modifier) {
-          RootScreen(viewModel = viewModel)
-        }
+        RootScreen(viewModel = viewModel)
       }
     }
   }

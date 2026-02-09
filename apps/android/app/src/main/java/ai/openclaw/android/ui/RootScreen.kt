@@ -201,8 +201,12 @@ fun RootScreen(viewModel: MainViewModel) {
   }
 
   // Camera flash must be in a Popup to render above the WebView.
-  Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
-    CameraFlashOverlay(token = cameraFlashToken, modifier = Modifier.fillMaxSize())
+  // Only show the Popup when a flash is active; an always-present full-screen
+  // Popup window intercepts all touch events, blocking the WebView beneath it.
+  if (cameraFlashToken != 0L) {
+    Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
+      CameraFlashOverlay(token = cameraFlashToken, modifier = Modifier.fillMaxSize())
+    }
   }
 
   // Keep the overlay buttons above the WebView canvas (AndroidView), otherwise they may not receive touches.
