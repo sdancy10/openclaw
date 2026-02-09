@@ -18,12 +18,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
@@ -60,7 +57,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.LocationMode
@@ -89,6 +85,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualToken by viewModel.manualToken.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
+  val awaitingPairing by viewModel.awaitingPairing.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val gateways by viewModel.gateways.collectAsState()
@@ -290,7 +287,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     // Gateway
     item { Text("Gateway", style = MaterialTheme.typography.titleSmall) }
     item { ListItem(headlineContent = { Text("Status") }, supportingContent = { Text(statusText) }) }
-    if (statusText.contains("pairing", ignoreCase = true)) {
+    if (awaitingPairing) {
       item {
         ListItem(
           headlineContent = { Text("Device Pairing Pending") },
@@ -450,38 +447,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
             Text("Connect (Manual)")
           }
 
-          // Debug log window
-          val debugLines by ai.openclaw.android.gateway.DebugLog.lines.collectAsState()
-          if (debugLines.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-              Text("Debug Log", style = MaterialTheme.typography.labelMedium)
-              val clipboard = androidx.compose.ui.platform.LocalClipboard.current
-              val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
-              Button(
-                onClick = {
-                  coroutineScope.launch {
-                    clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(android.content.ClipData.newPlainText("debug log", debugLines.joinToString("\n"))))
-                  }
-                },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-              ) {
-                Text("Copy", fontSize = 12.sp)
-              }
-            }
-            androidx.compose.foundation.text.selection.SelectionContainer {
-              Text(
-                text = debugLines.joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                fontSize = 10.sp,
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .height(200.dp)
-                  .background(MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small)
-                  .padding(8.dp)
-              )
-            }
-          }
         }
       }
     }

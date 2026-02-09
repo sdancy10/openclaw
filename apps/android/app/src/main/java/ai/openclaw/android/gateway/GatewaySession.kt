@@ -12,6 +12,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -84,6 +87,9 @@ class GatewaySession(
   private val writeLock = Mutex()
   private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
+  private val _awaitingPairing = MutableStateFlow(false)
+  val awaitingPairing: StateFlow<Boolean> = _awaitingPairing.asStateFlow()
+
   @Volatile private var canvasHostUrl: String? = null
   @Volatile private var mainSessionKey: String? = null
 
@@ -120,6 +126,7 @@ class GatewaySession(
       job = null
       canvasHostUrl = null
       mainSessionKey = null
+      _awaitingPairing.value = false
       onDisconnected("Offline")
     }
   }
@@ -193,22 +200,9 @@ class GatewaySession(
     suspend fun connect() {
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
-      DebugLog.log("WS", "connect → $url tls=${tls != null}")
       val request = Request.Builder().url(url).build()
-      try {
-        socket = client.newWebSocket(request, Listener())
-      } catch (err: Throwable) {
-        DebugLog.log("WS", "newWebSocket threw: ${err::class.java.name}: ${err.message}")
-        throw err
-      }
-      DebugLog.log("WS", "WebSocket created, awaiting handshake...")
-      try {
-        connectDeferred.await()
-        DebugLog.log("WS", "Connected successfully!")
-      } catch (err: Throwable) {
-        DebugLog.log("WS", "connectDeferred failed: ${err::class.java.name}: ${err.message}")
-        throw err
-      }
+      socket = client.newWebSocket(request, Listener())
+      connectDeferred.await()
     }
 
     suspend fun request(method: String, params: JsonElement?, timeoutMs: Long): RpcResponse {
@@ -267,11 +261,9 @@ class GatewaySession(
 
     private inner class Listener : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
-        DebugLog.log("WS", "onOpen! response=${response.code}")
         scope.launch {
           try {
             val nonce = awaitConnectNonce()
-            DebugLog.log("WS", "got nonce=$nonce, sending connect...")
             sendConnect(nonce)
           } catch (err: Throwable) {
             connectDeferred.completeExceptionally(err)
@@ -322,23 +314,18 @@ class GatewaySession(
     }
 
     private suspend fun sendConnect(connectNonce: String?) {
-      DebugLog.log("SC", "sendConnect start, role=${options.role}")
       val identity = try {
         identityStore.loadOrCreate()
       } catch (err: Throwable) {
-        DebugLog.log("SC", "loadOrCreate FAILED: ${err::class.java.name}: ${err.message}")
+        Log.e(loggerTag, "loadOrCreate failed", err)
         throw err
       }
-      DebugLog.log("SC", "identity=${identity.deviceId.take(8)}...")
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
       val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
-      DebugLog.log("SC", "authToken=${if (authToken.isEmpty()) "empty" else "set(${authToken.length})"} role=${options.role}")
       val canFallbackToShared = !storedToken.isNullOrBlank() && trimmedToken.isNotBlank()
       val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
-      DebugLog.log("SC", "sending connect request...")
       val res = request("connect", payload, timeoutMs = 8_000)
-      DebugLog.log("SC", "connect response: ok=${res.ok} error=${res.error?.code}:${res.error?.message}")
       if (!res.ok) {
         val errorCode = res.error?.code ?: ""
         val msg = res.error?.message ?: "connect failed"
@@ -590,37 +577,35 @@ class GatewaySession(
   }
 
   private suspend fun runLoop() {
-    DebugLog.log("GW", "runLoop started, role=${desired?.options}")
     var attempt = 0
-    var awaitingPairing = false
     while (scope.isActive) {
       val target = desired
       if (target == null) {
         currentConnection?.closeQuietly()
         currentConnection = null
-        awaitingPairing = false
+        _awaitingPairing.value = false
         delay(250)
         continue
       }
 
       try {
-        if (!awaitingPairing) {
+        if (!_awaitingPairing.value) {
           onDisconnected(if (attempt == 0) "Connecting…" else "Reconnecting…")
         }
         connectOnce(target)
         attempt = 0
-        awaitingPairing = false
+        _awaitingPairing.value = false
       } catch (err: Throwable) {
         attempt += 1
         if (err is PairingRequiredException) {
-          if (!awaitingPairing) {
+          if (!_awaitingPairing.value) {
             onDisconnected(err.message ?: "Pairing required")
           }
-          awaitingPairing = true
+          _awaitingPairing.value = true
           delay(5_000)
           continue
         }
-        awaitingPairing = false
+        _awaitingPairing.value = false
         val cause = err.cause
         val detail = buildString {
           append(err::class.java.simpleName)
