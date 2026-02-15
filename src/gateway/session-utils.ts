@@ -359,7 +359,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<
     string,
-    { name?: string; identity?: GatewayAgentRow["identity"] }
+    { name?: string; model?: string; skills?: string[]; identity?: GatewayAgentRow["identity"] }
   >();
   for (const entry of cfg.agents?.list ?? []) {
     if (!entry?.id) {
@@ -378,8 +378,18 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
           ),
         }
       : undefined;
+    // Normalize model config to a plain string (extract primary if object form).
+    const rawModel = entry.model;
+    let model: string | undefined;
+    if (typeof rawModel === "string" && rawModel.trim()) {
+      model = rawModel.trim();
+    } else if (rawModel && typeof rawModel === "object" && rawModel.primary?.trim()) {
+      model = rawModel.primary.trim();
+    }
     configuredById.set(normalizeAgentId(entry.id), {
       name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
+      model,
+      skills: entry.skills && entry.skills.length > 0 ? entry.skills : undefined,
       identity,
     });
   }
@@ -395,11 +405,16 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     agentIds = [...agentIds, mainKey];
   }
+  // Resolve the default model so agents without a per-agent override inherit it.
+  // AgentDefaultsConfig.model is always { primary?, fallbacks? } (AgentModelListConfig).
+  const defaultModel = cfg.agents?.defaults?.model?.primary?.trim() || undefined;
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     return {
       id,
-      name: meta?.name,
+      name: meta?.name ?? id,
+      model: meta?.model ?? defaultModel,
+      skills: meta?.skills,
       identity: meta?.identity,
     };
   });

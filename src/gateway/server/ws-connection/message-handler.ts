@@ -430,7 +430,9 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
-          if (scopes.length > 0) {
+          // Don't clear scopes for control UI with bypass enabled and valid shared auth
+          const canBypassScopesClear = isControlUi && allowControlUiBypass && sharedAuthOk;
+          if (scopes.length > 0 && !canBypassScopesClear) {
             scopes = [];
             connectParams.scopes = scopes;
           }
