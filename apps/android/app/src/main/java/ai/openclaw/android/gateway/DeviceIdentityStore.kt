@@ -2,13 +2,11 @@ package ai.openclaw.android.gateway
 
 import android.content.Context
 import android.util.Base64
-import android.util.Log
 import java.io.File
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
-import java.security.spec.ECGenParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -19,7 +17,6 @@ data class DeviceIdentity(
   val publicKeyRawBase64: String,
   val privateKeyPkcs8Base64: String,
   val createdAtMs: Long,
-  val keyAlgorithm: String = "unknown",
 )
 
 class DeviceIdentityStore(context: Context) {
@@ -30,16 +27,6 @@ class DeviceIdentityStore(context: Context) {
   fun loadOrCreate(): DeviceIdentity {
     val existing = load()
     if (existing != null) {
-      // Migrate old keys generated with wrong algorithm/digest params.
-      // Old keys used "Ed25519" in AndroidKeyStore which silently created P-256 with
-      // DIGEST_NONE — making SHA256withECDSA signing impossible.
-      if (existing.privateKeyPkcs8Base64 == "__ANDROID_KEYSTORE__" && existing.keyAlgorithm != "ec_p256") {
-        Log.i(TAG, "Migrating old KeyStore key (algo=${existing.keyAlgorithm}), regenerating as EC P-256")
-        deleteOldKeystoreEntry()
-        val fresh = generate()
-        save(fresh)
-        return fresh
-      }
       val derived = deriveDeviceId(existing.publicKeyRawBase64)
       if (derived != null && derived != existing.deviceId) {
         val updated = existing.copy(deviceId = derived)
@@ -54,21 +41,44 @@ class DeviceIdentityStore(context: Context) {
   }
 
   fun signPayload(payload: String, identity: DeviceIdentity): String? {
-    if (identity.privateKeyPkcs8Base64 == "__ANDROID_KEYSTORE__") {
-      return signWithKeyStore(payload)
-    }
     return try {
+      // Use BC lightweight API directly — JCA provider registration is broken by R8
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
-      val keySpec = PKCS8EncodedKeySpec(privateKeyBytes)
-      val keyFactory = KeyFactory.getInstance("Ed25519")
-      val privateKey = keyFactory.generatePrivate(keySpec)
-      val signature = Signature.getInstance("Ed25519")
-      signature.initSign(privateKey)
-      signature.update(payload.toByteArray(Charsets.UTF_8))
-      base64UrlEncode(signature.sign())
-    } catch (_: Throwable) {
+      val pkInfo = org.bouncycastle.asn1.pkcs.PrivateKeyInfo.getInstance(privateKeyBytes)
+      val parsed = pkInfo.parsePrivateKey()
+      val rawPrivate = org.bouncycastle.asn1.DEROctetString.getInstance(parsed).octets
+      val privateKey = org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(rawPrivate, 0)
+      val signer = org.bouncycastle.crypto.signers.Ed25519Signer()
+      signer.init(true, privateKey)
+      val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+      signer.update(payloadBytes, 0, payloadBytes.size)
+      base64UrlEncode(signer.generateSignature())
+    } catch (e: Throwable) {
+      android.util.Log.e("DeviceAuth", "signPayload FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
       null
     }
+  }
+
+  fun verifySelfSignature(payload: String, signatureBase64Url: String, identity: DeviceIdentity): Boolean {
+    return try {
+      val rawPublicKey = Base64.decode(identity.publicKeyRawBase64, Base64.DEFAULT)
+      val pubKey = org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(rawPublicKey, 0)
+      val sigBytes = base64UrlDecode(signatureBase64Url)
+      val verifier = org.bouncycastle.crypto.signers.Ed25519Signer()
+      verifier.init(false, pubKey)
+      val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+      verifier.update(payloadBytes, 0, payloadBytes.size)
+      verifier.verifySignature(sigBytes)
+    } catch (e: Throwable) {
+      android.util.Log.e("DeviceAuth", "self-verify exception: ${e.message}", e)
+      false
+    }
+  }
+
+  private fun base64UrlDecode(input: String): ByteArray {
+    val normalized = input.replace('-', '+').replace('_', '/')
+    val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
+    return Base64.decode(padded, Base64.DEFAULT)
   }
 
   fun publicKeyBase64Url(identity: DeviceIdentity): String? {
@@ -113,7 +123,23 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun generate(): DeviceIdentity {
-    return generateUsingKeyStore()
+    // Use BC lightweight API directly to avoid JCA provider issues with R8
+    val kpGen = org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator()
+    kpGen.init(org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters(java.security.SecureRandom()))
+    val kp = kpGen.generateKeyPair()
+    val pubKey = kp.public as org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+    val privKey = kp.private as org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+    val rawPublic = pubKey.encoded  // 32 bytes
+    val deviceId = sha256Hex(rawPublic)
+    // Encode private key as PKCS8 for storage
+    val privKeyInfo = org.bouncycastle.crypto.util.PrivateKeyInfoFactory.createPrivateKeyInfo(privKey)
+    val pkcs8Bytes = privKeyInfo.encoded
+    return DeviceIdentity(
+      deviceId = deviceId,
+      publicKeyRawBase64 = Base64.encodeToString(rawPublic, Base64.NO_WRAP),
+      privateKeyPkcs8Base64 = Base64.encodeToString(pkcs8Bytes, Base64.NO_WRAP),
+      createdAtMs = System.currentTimeMillis(),
+    )
   }
 
   private fun deriveDeviceId(publicKeyRawBase64: String): String? {
@@ -123,6 +149,15 @@ class DeviceIdentityStore(context: Context) {
     } catch (_: Throwable) {
       null
     }
+  }
+
+  private fun stripSpkiPrefix(spki: ByteArray): ByteArray {
+    if (spki.size == ED25519_SPKI_PREFIX.size + 32 &&
+      spki.copyOfRange(0, ED25519_SPKI_PREFIX.size).contentEquals(ED25519_SPKI_PREFIX)
+    ) {
+      return spki.copyOfRange(ED25519_SPKI_PREFIX.size, spki.size)
+    }
+    return spki
   }
 
   private fun sha256Hex(data: ByteArray): String {
@@ -138,90 +173,7 @@ class DeviceIdentityStore(context: Context) {
     return Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
   }
 
-  private val keystoreAlias = "openclaw_device_p256"
-  private val oldKeystoreAlias = "openclaw_device_ed25519"
-
-  /** Delete only the legacy Ed25519 alias. Called during migration. */
-  private fun deleteOldKeystoreEntry() {
-    try {
-      val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
-      ks.load(null)
-      if (ks.containsAlias(oldKeystoreAlias)) {
-        ks.deleteEntry(oldKeystoreAlias)
-      }
-    } catch (_: Throwable) {}
-  }
-
-  /**
-   * Return a DeviceIdentity backed by the Android KeyStore.
-   * If a valid P-256 key already exists under [keystoreAlias], reuse it
-   * (e.g., identity file was deleted/corrupted but the hardware key survived).
-   * Only generates a new key when no usable entry is found.
-   */
-  private fun generateUsingKeyStore(): DeviceIdentity {
-    // Try to reuse an existing P-256 KeyStore entry
-    try {
-      val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
-      ks.load(null)
-      if (ks.containsAlias(keystoreAlias)) {
-        val entry = ks.getEntry(keystoreAlias, null) as? java.security.KeyStore.PrivateKeyEntry
-        if (entry != null) {
-          val spki = entry.certificate.publicKey.encoded
-          val deviceId = sha256Hex(spki)
-          Log.i(TAG, "Reusing existing KeyStore entry, deviceId=${deviceId.take(8)}…")
-          return DeviceIdentity(
-            deviceId = deviceId,
-            publicKeyRawBase64 = Base64.encodeToString(spki, Base64.NO_WRAP),
-            privateKeyPkcs8Base64 = "__ANDROID_KEYSTORE__",
-            createdAtMs = System.currentTimeMillis(),
-            keyAlgorithm = "ec_p256",
-          )
-        }
-      }
-    } catch (_: Throwable) {
-      // Fall through to generate a new key
-    }
-
-    // No usable entry — generate a fresh P-256 key
-    val spec = android.security.keystore.KeyGenParameterSpec.Builder(
-      keystoreAlias,
-      android.security.keystore.KeyProperties.PURPOSE_SIGN or android.security.keystore.KeyProperties.PURPOSE_VERIFY
-    )
-      .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-      .setDigests(android.security.keystore.KeyProperties.DIGEST_SHA256)
-      .build()
-    val kpg = KeyPairGenerator.getInstance("EC", "AndroidKeyStore")
-    kpg.initialize(spec)
-    val keyPair = kpg.generateKeyPair()
-    val spki = keyPair.public.encoded // Full P-256 SPKI DER (91 bytes)
-    val deviceId = sha256Hex(spki)
-    return DeviceIdentity(
-      deviceId = deviceId,
-      publicKeyRawBase64 = Base64.encodeToString(spki, Base64.NO_WRAP),
-      privateKeyPkcs8Base64 = "__ANDROID_KEYSTORE__",
-      createdAtMs = System.currentTimeMillis(),
-      keyAlgorithm = "ec_p256",
-    )
-  }
-
-  fun signWithKeyStore(payload: String): String? {
-    return try {
-      val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
-      ks.load(null)
-      val entry = ks.getEntry(keystoreAlias, null) as? java.security.KeyStore.PrivateKeyEntry ?: return null
-      val signature = Signature.getInstance("SHA256withECDSA")
-      signature.initSign(entry.privateKey)
-      signature.update(payload.toByteArray(Charsets.UTF_8))
-      val sigBytes = signature.sign()
-      base64UrlEncode(sigBytes)
-    } catch (e: Throwable) {
-      Log.w(TAG, "signWithKeyStore failed", e)
-      null
-    }
-  }
-
   companion object {
-    private const val TAG = "DeviceIdentityStore"
     private val ED25519_SPKI_PREFIX =
       byteArrayOf(
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,

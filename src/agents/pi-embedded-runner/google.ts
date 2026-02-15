@@ -5,6 +5,10 @@ import { EventEmitter } from "node:events";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  hasInterSessionUserProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
+import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
@@ -44,6 +48,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "maxProperties",
 ]);
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
 function isValidAntigravitySignature(value: unknown): value is string {
   if (typeof value !== "string") {
@@ -59,7 +64,7 @@ function isValidAntigravitySignature(value: unknown): value is string {
   return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
 }
 
-function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
@@ -115,6 +120,85 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       continue;
     }
     out.push(contentChanged ? { ...assistant, content: nextContent } : msg);
+  }
+  return touched ? out : messages;
+}
+
+function buildInterSessionPrefix(message: AgentMessage): string {
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  if (!provenance) {
+    return INTER_SESSION_PREFIX_BASE;
+  }
+  const details = [
+    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
+    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
+    provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
+  ].filter(Boolean);
+  if (details.length === 0) {
+    return INTER_SESSION_PREFIX_BASE;
+  }
+  return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
+}
+
+function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
+      out.push(msg);
+      continue;
+    }
+    const prefix = buildInterSessionPrefix(msg);
+    const user = msg as Extract<AgentMessage, { role: "user" }>;
+    if (typeof user.content === "string") {
+      if (user.content.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: `${prefix}\n${user.content}`,
+      } as AgentMessage);
+      continue;
+    }
+    if (!Array.isArray(user.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const textIndex = user.content.findIndex(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    );
+
+    if (textIndex >= 0) {
+      const existing = user.content[textIndex] as { type: "text"; text: string };
+      if (existing.text.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      const nextContent = [...user.content];
+      nextContent[textIndex] = {
+        ...existing,
+        text: `${prefix}\n${existing.text}`,
+      };
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: nextContent,
+      } as AgentMessage);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...(msg as unknown as Record<string, unknown>),
+      content: [{ type: "text", text: prefix }, ...user.content],
+    } as AgentMessage);
   }
   return touched ? out : messages;
 }
@@ -227,92 +311,6 @@ registerUnhandledRejectionHandler((reason) => {
   return true;
 });
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse"]);
-
-function describeAbortedToolCalls(content: unknown[], stopReason: string): string {
-  const toolNames: string[] = [];
-  for (const block of content) {
-    const rec = block as { type?: unknown; name?: unknown };
-    if (typeof rec.type === "string" && TOOL_CALL_BLOCK_TYPES.has(rec.type)) {
-      toolNames.push(typeof rec.name === "string" ? rec.name : "unknown");
-    }
-  }
-  const reason = stopReason === "aborted" ? "connection interruption" : "a streaming error";
-  if (toolNames.length === 0) {
-    return `[A previous response was interrupted due to ${reason} before completing. No tool calls were finalized.]`;
-  }
-  const names = toolNames.map((n) => `\`${n}\``).join(", ");
-  const plural = toolNames.length > 1 ? "calls" : "call";
-  return `[A previous response was interrupted due to ${reason}. Tool ${plural} to ${names} did not complete and no results were returned. You may retry if still needed.]`;
-}
-
-export function stripAbortedAssistantMessages(messages: AgentMessage[]): AgentMessage[] {
-  // Collect tool_call IDs from aborted/errored assistant messages so we can
-  // drop their orphaned tool_results.  Replace each aborted assistant with a
-  // text-only message that preserves context for the LLM.
-  const abortedToolCallIds = new Set<string>();
-  const abortedIndices = new Set<number>();
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    if (msg.role !== "assistant") {
-      continue;
-    }
-    const stopReason = (msg as { stopReason?: unknown }).stopReason;
-    if (stopReason !== "aborted" && stopReason !== "error") {
-      continue;
-    }
-
-    abortedIndices.add(i);
-    if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        const rec = block as { type?: unknown; id?: unknown };
-        if (
-          typeof rec.type === "string" &&
-          TOOL_CALL_BLOCK_TYPES.has(rec.type) &&
-          typeof rec.id === "string"
-        ) {
-          abortedToolCallIds.add(rec.id);
-        }
-      }
-    }
-  }
-
-  if (abortedIndices.size === 0) {
-    return messages;
-  }
-
-  const out: AgentMessage[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (abortedIndices.has(i)) {
-      // Replace aborted assistant with a text-only message carrying context
-      const stopReason = String((msg as { stopReason?: unknown }).stopReason);
-      const content = Array.isArray((msg as { content?: unknown }).content)
-        ? (msg as { content?: unknown[] }).content!
-        : [];
-      const description = describeAbortedToolCalls(content, stopReason);
-      out.push({
-        ...msg,
-        content: [{ type: "text", text: description }],
-        stopReason: undefined,
-      } as unknown as AgentMessage);
-      continue;
-    }
-    if (msg.role === "toolResult") {
-      const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-      if (typeof toolCallId === "string" && abortedToolCallIds.has(toolCallId)) {
-        continue;
-      }
-    }
-    out.push(msg);
-  }
-  return out;
-}
-
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 type ModelSnapshotEntry = {
@@ -408,6 +406,25 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
+function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
+      out.push(msg);
+      continue;
+    }
+    if (!("details" in msg)) {
+      out.push(msg);
+      continue;
+    }
+    const { details: _details, ...rest } = msg as unknown as Record<string, unknown>;
+    touched = true;
+    out.push(rest as unknown as AgentMessage);
+  }
+  return touched ? out : messages;
+}
+
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
@@ -418,7 +435,6 @@ export async function sanitizeSessionHistory(params: {
   policy?: TranscriptPolicy;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
-  const strippedAborted = stripAbortedAssistantMessages(params.messages);
   const policy =
     params.policy ??
     resolveTranscriptPolicy({
@@ -426,13 +442,18 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
     });
-  const sanitizedImages = await sanitizeSessionMessagesImages(strippedAborted, "session:history", {
-    sanitizeMode: policy.sanitizeMode,
-    sanitizeToolCallIds: policy.sanitizeToolCallIds,
-    toolCallIdMode: policy.toolCallIdMode,
-    preserveSignatures: policy.preserveSignatures,
-    sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-  });
+  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    withInterSessionMarkers,
+    "session:history",
+    {
+      sanitizeMode: policy.sanitizeMode,
+      sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      toolCallIdMode: policy.toolCallIdMode,
+      preserveSignatures: policy.preserveSignatures,
+      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+    },
+  );
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
@@ -440,6 +461,7 @@ export async function sanitizeSessionHistory(params: {
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
+  const sanitizedToolResults = stripToolResultDetails(repairedTools);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -455,8 +477,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+      : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

@@ -22,10 +22,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val discoveryStatusText: StateFlow<String> = runtime.discoveryStatusText
 
   val isConnected: StateFlow<Boolean> = runtime.isConnected
-  val awaitingPairing: StateFlow<Boolean> = runtime.awaitingPairing
   val statusText: StateFlow<String> = runtime.statusText
   val serverName: StateFlow<String?> = runtime.serverName
   val remoteAddress: StateFlow<String?> = runtime.remoteAddress
+  val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtime.pendingGatewayTrust
   val isForeground: StateFlow<Boolean> = runtime.isForeground
   val seamColorArgb: StateFlow<Long> = runtime.seamColorArgb
   val mainSessionKey: StateFlow<String> = runtime.mainSessionKey
@@ -52,7 +52,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
   val manualTls: StateFlow<Boolean> = runtime.manualTls
-  val manualToken: StateFlow<String> = runtime.manualToken
+  val gatewayToken: StateFlow<String> = runtime.gatewayToken
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
@@ -106,8 +106,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setManualTls(value)
   }
 
-  fun setManualToken(value: String) {
-    runtime.setManualToken(value)
+  fun setGatewayToken(value: String) {
+    runtime.setGatewayToken(value)
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
@@ -144,6 +144,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun disconnect() {
     runtime.disconnect()
+  }
+
+  fun acceptGatewayTrustPrompt() {
+    runtime.acceptGatewayTrustPrompt()
+  }
+
+  fun declineGatewayTrustPrompt() {
+    runtime.declineGatewayTrustPrompt()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
