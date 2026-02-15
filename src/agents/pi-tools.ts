@@ -53,6 +53,7 @@ import {
   collectExplicitAllowlist,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -253,7 +254,7 @@ export function createOpenClawCodingTools(options?: {
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
-  const workspaceRoot = options?.workspaceDir ?? process.cwd();
+  const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const workspaceOnly = fsConfig.workspaceOnly === true;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
@@ -275,12 +276,11 @@ export function createOpenClawCodingTools(options?: {
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
       if (sandboxRoot) {
-        return [
-          createSandboxedReadTool({
-            root: sandboxRoot,
-            bridge: sandboxFsBridge!,
-          }),
-        ];
+        const sandboxed = createSandboxedReadTool({
+          root: sandboxRoot,
+          bridge: sandboxFsBridge!,
+        });
+        return [workspaceOnly ? wrapToolWorkspaceRootGuard(sandboxed, sandboxRoot) : sandboxed];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       const wrapped = createOpenClawReadTool(freshReadTool);
@@ -364,8 +364,18 @@ export function createOpenClawCodingTools(options?: {
     ...(sandboxRoot
       ? allowWorkspaceWrites
         ? [
-            createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-            createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuard(
+                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                )
+              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuard(
+                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                )
+              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
           ]
         : []
       : []),
