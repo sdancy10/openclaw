@@ -1,11 +1,11 @@
 import { lookup } from "node:dns/promises";
+import type { SsrFPolicy } from "openclaw/plugin-sdk";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
 } from "openclaw/plugin-sdk";
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
@@ -8,7 +9,6 @@ import {
   resolveMentionGatingWithBypass,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";

@@ -242,7 +242,7 @@ export async function handleToolsInvokeHttpRequest(
     accountId: accountId ?? null,
   });
   const subagentPolicy = isSubagentSessionKey(sessionKey)
-    ? resolveSubagentToolPolicy(cfg, agentId)
+    ? resolveSubagentToolPolicy(cfg, undefined)
     : undefined;
 
   // Build tool list (core + plugin tools).

@@ -21,8 +21,8 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
-import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {

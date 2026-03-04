@@ -16,8 +16,8 @@ import type {
   CronSortDir,
   CronStatus,
 } from "../types.ts";
-import { CRON_CHANNEL_LAST } from "../ui-types.ts";
 import type { CronFormState } from "../ui-types.ts";
+import { CRON_CHANNEL_LAST } from "../ui-types.ts";
 
 export type CronFieldKey =
   | "name"

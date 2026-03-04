@@ -390,7 +390,9 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   }
   // Resolve the default model so agents without a per-agent override inherit it.
   // AgentDefaultsConfig.model is always { primary?, fallbacks? } (AgentModelListConfig).
-  const defaultModel = cfg.agents?.defaults?.model?.primary?.trim() || undefined;
+  const rawDefault = cfg.agents?.defaults?.model;
+  const defaultModel =
+    (typeof rawDefault === "string" ? rawDefault : rawDefault?.primary)?.trim() || undefined;
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     return {
