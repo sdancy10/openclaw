@@ -1,4 +1,5 @@
 import net from "node:net";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 
 export async function requestJsonlSocket<T>(params: {
   socketPath: string;
@@ -25,11 +26,12 @@ export async function requestJsonlSocket<T>(params: {
       resolve(value);
     };
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
+    const timer = setNodeTimeout(() => finish(null), timeoutMs);
 
     client.on("error", () => finish(null));
     client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
+      // The macOS exec host can wait for EOF before responding, so finish writing.
+      client.end(`${payload}\n`);
     });
     client.on("data", (data) => {
       buffer += data.toString("utf8");
@@ -47,7 +49,7 @@ export async function requestJsonlSocket<T>(params: {
           if (result === undefined) {
             continue;
           }
-          clearTimeout(timer);
+          clearNodeTimeout(timer);
           finish(result);
           return;
         } catch {
