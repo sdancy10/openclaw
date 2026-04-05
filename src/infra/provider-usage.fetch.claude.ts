@@ -125,7 +125,7 @@ export async function fetchClaudeUsage(
         "User-Agent": "openclaw",
         Accept: "application/json",
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,context-1m-2025-08-07,structured-outputs-2025-12-15,context-management-2025-06-27",
       },
     },
     timeoutMs,

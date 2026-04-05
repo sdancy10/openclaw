@@ -9,6 +9,23 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "X-Title": "OpenClaw",
 };
 
+// Anthropic beta flags — must match the full set from Claude Code reference.
+// These enable OAuth auth, tool streaming, extended thinking, 1M context,
+// structured outputs, and context management features.
+const ANTHROPIC_BETA_FLAGS = [
+  "claude-code-20250219",
+  "oauth-2025-04-20",
+  "fine-grained-tool-streaming-2025-05-14",
+  "interleaved-thinking-2025-05-14",
+  "context-1m-2025-08-07",
+  "structured-outputs-2025-12-15",
+  "context-management-2025-06-27",
+].join(",");
+
+const ANTHROPIC_EXTRA_HEADERS: Record<string, string> = {
+  "anthropic-beta": ANTHROPIC_BETA_FLAGS,
+};
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -118,6 +135,23 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
+ * Create a streamFn wrapper that adds Anthropic beta feature headers.
+ * These headers enable OAuth auth, tool streaming, extended thinking,
+ * 1M context, structured outputs, and context management.
+ */
+function createAnthropicHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: {
+        ...ANTHROPIC_EXTRA_HEADERS,
+        ...options?.headers,
+      },
+    });
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
@@ -152,5 +186,11 @@ export function applyExtraParamsToAgent(
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+  }
+
+  const normalizedProvider = provider.toLowerCase().replace(/[^a-z]/g, "");
+  if (normalizedProvider === "anthropic" || normalizedProvider.startsWith("anthropic")) {
+    log.debug(`applying Anthropic beta headers for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicHeadersWrapper(agent.streamFn);
   }
 }
