@@ -51,11 +51,11 @@ const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
 const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
 
 // GPT 5.5 — synthesized from the gpt-5.4 catalog entry (which itself is
-// synthesized from gpt-5.2). Cost/context placeholders mirror gpt-5.4 until
-// OpenAI publishes official 5.5 numbers; update when the canonical catalog
-// catches up. Pulled forward from upstream openclaw/openclaw.
+// synthesized from gpt-5.2). Context window reflects gpt-5.5's actual 1M
+// support; cost is a placeholder mirroring gpt-5.4 until OpenAI publishes
+// official 5.5 numbers. Pulled forward from upstream openclaw/openclaw.
 const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
-const OPENAI_GPT_55_CONTEXT_TOKENS = 272_000;
+const OPENAI_GPT_55_CONTEXT_TOKENS = 1_000_000;
 const OPENAI_GPT_55_COST = { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 } as const;
 const OPENAI_GPT_55_TEMPLATE_MODEL_IDS = ["gpt-5.4", "gpt-5.2"] as const;
 
